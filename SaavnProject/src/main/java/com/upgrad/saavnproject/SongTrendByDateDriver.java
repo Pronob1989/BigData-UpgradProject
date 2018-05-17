@@ -32,6 +32,7 @@ public class SongTrendByDateDriver extends Configured implements Tool {
 
 		if (args.length != INPUT_ARG_LENGTH) {
 			System.err.println("Usage: SongTrendByDateDriver <input path> <MR output path>");
+			System.err.println("Input file format : (song ID, user ID, timestamp, hour, date)");
 		    System.exit(-1);
 		}
 		
