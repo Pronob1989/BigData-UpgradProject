@@ -1,0 +1,18 @@
+
+Direct Addressing Method:
+
+ADD() 	- O(1) worst case running time. Since insertion is using the index into the array
+FIND()	- O(1) worst case running time. Since find is using the index into the array
+COUNT() - O(1) worst case running time. Since find is using the index into the array
+
+
+Hashing Method:
+
+ADD() - O(n) worst case whenever rehashing is triggered for Add Operation. If the bucket array is doubled in size every time it is needed, then the insertion of n elements in a row into an empty array takes only O(n) time, perhaps surprisingly. We say that add has O(1) amortized run time because the time required to insert an element is O(1) on the average even though some elements trigger a lengthy rehashing of all the elements of the hash table.
+
+FIND()	- O(N) worst case running time. Where N is the total number of elements present in table. 
+		It means hash function used is poor which returns the same key for all inputs
+		Takes O(n/m) in average, if n is the number of items and m is the size
+COUNT() - O(N) worst case running time. Where N is the total number of elements present in table
+		It means hash function used is poor which returns the same key for all inputs
+		Takes O(n/m) in average, if n is the number of items and m is the size
