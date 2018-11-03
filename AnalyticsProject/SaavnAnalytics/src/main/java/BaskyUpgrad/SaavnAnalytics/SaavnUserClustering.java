@@ -3,30 +3,27 @@ package BaskyUpgrad.SaavnAnalytics;
 import static org.apache.spark.sql.functions.col;
 
 import java.io.Serializable;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
 import org.apache.log4j.Level;
 import org.apache.log4j.Logger;
-import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.ml.clustering.KMeans;
 import org.apache.spark.ml.clustering.KMeansModel;
-import org.apache.spark.ml.feature.IndexToString;
-import org.apache.spark.ml.feature.StandardScaler;
-import org.apache.spark.ml.feature.StandardScalerModel;
 import org.apache.spark.ml.feature.StringIndexer;
-import org.apache.spark.ml.feature.VectorAssembler;
 import org.apache.spark.ml.linalg.Vector;
+import org.apache.spark.ml.linalg.VectorUDT;
+import org.apache.spark.ml.linalg.Vectors;
 import org.apache.spark.ml.recommendation.ALS;
 import org.apache.spark.ml.recommendation.ALSModel;
-import org.apache.spark.sql.DataFrameWriter;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.functions;
-import org.apache.spark.sql.expressions.Window;
+import org.apache.spark.sql.api.java.UDF1;
 import org.apache.spark.sql.types.DataTypes;
+
+import scala.collection.Seq;
 
 
 public class SaavnUserClustering 
@@ -67,8 +64,8 @@ public class SaavnUserClustering
 				.getOrCreate();
 
 		//Read user click stream data
-		//String profilePath = "data/sample1.txt";
-		String profilePath = "data/sample100mb.csv";
+		String profilePath = "data/sample1.txt";
+		//String profilePath = "data/sample100mb.csv";
 		Dataset<Row> userProfile =
 				sparkSession.read().format("csv").
 				option("header","false").load(profilePath).
@@ -167,52 +164,35 @@ public class SaavnUserClustering
 		
 		System.out.println("userAlsFeature Grouped row Count: "+userAlsFeature.count());
 		userAlsFeature.show(100,false);
+		userAlsFeature.printSchema();
 		
+		sparkSession.udf().register("ATOV", new UDF1<Seq<Float>, Vector>() {
+			  /**
+			 * 
+			 */
+			private static final long serialVersionUID = 1L;
+
+			@Override
+			  public Vector call(Seq<Float> t1) {
+				  List<Float> L = scala.collection.JavaConversions.seqAsJavaList(t1);
+				    double[] DoubleArray = new double[t1.length()]; 
+				    for (int i = 0 ; i < L.size(); i++) { 
+				      DoubleArray[i]=L.get(i); 
+				    } 
+				    return Vectors.dense(DoubleArray); 
+			  }
+		}, new VectorUDT());
 		
+		Dataset<Row> userAlsFeatureVect = 
+				userAlsFeature.withColumn("featuresVect", functions.callUDF("ATOV", userAlsFeature.col("features"))).drop("features");
+		
+		userAlsFeatureVect = userAlsFeatureVect.toDF("UserId", "UserIndex", "features");
+		
+		userAlsFeatureVect.printSchema();
+		
+		userAlsFeatureVect.show(100,false);
 		/*
-		// Data Preprocessing
-		// drop the columns which we don't need
-		String[] dropCol = {"Date","MarkDown1","MarkDown2","MarkDown3","MarkDown4","MarkDown5","IsHoliday"};
-		
-		for(String col: dropCol) {
-			data = data.drop(col);
-		}
-		
-		System.out.println("Droping columns csv: "+data.columns().length+" : "+data.count());
-		data.show(10);
-
-		// drop the rows containing any null or NaN values
-		data = data.na().drop();
-		
-		System.out.println("Droping Rows containing nul csv: "+data.columns().length+" : "+data.count());
-		data.show(10);
-
-		// Cast the variables to the desired type
-		Dataset<Row> data_new = data.withColumn("Temperature", col("Temperature").cast(DataTypes.FloatType))
-		.withColumn("Fuel_Price", col("Fuel_price").cast(DataTypes.FloatType))
-		.withColumn("CPI", col("CPI").cast(DataTypes.FloatType))
-		.withColumn("Unemployment", col("Unemployment").cast(DataTypes.FloatType));
-		System.out.println("Casted the vats successfully.");
-		data_new.show(10);
-		
-		// Group By based on Store
-	    Dataset<Row> data_grouped = data_new.select("*").groupBy("Store").avg("Temperature","Fuel_Price","CPI","Unemployment")
-	    		.toDF("store","temp_avg","fuel_avg","cpi_avg","unemp_avg");
-	    data_grouped.show(10);		 
-	    
-	    // Drop the Store Number before clustering, add on later
-	    Dataset <Row> clusterIn = data_grouped.drop("store");
-
-   		ArrayList<String> inputColsList = new ArrayList<String>(Arrays.asList(clusterIn.columns()));
-
-		//Make single features column for feature vectors 
-		String[] inputCols = inputColsList.parallelStream().toArray(String[]::new);
-		
-		//Prepare dataset for training with all features in "features" column
-		VectorAssembler assembler = new VectorAssembler().setInputCols(inputCols).setOutputCol("features");
-		Dataset<Row> finalData = assembler.transform(clusterIn);
-
-	    // Scale the variables
+		// Scale the variables
 	    StandardScaler scaler = new StandardScaler()
 	    		  .setInputCol("features")
 	    		  .setOutputCol("scaledFeatures")
@@ -225,19 +205,19 @@ public class SaavnUserClustering
 	    		// Normalize each feature to have unit standard deviation.
 	    		Dataset<Row> scaledData = scalerModel.transform(finalData);
 	    		scaledData.show();
-	
+		*/
 		// Trains a k-means model, given array of k's
 		List<Integer> numClusters = Arrays.asList(2,4,6,8,10,12,14,16);
 		for (Integer k : numClusters) {
 			KMeans kmeans = new KMeans().setK(k).setSeed(1L);
-			KMeansModel model = kmeans.fit(scaledData);
+			KMeansModel modelk = kmeans.fit(userAlsFeatureVect);
 		
 			//Within Set Sum of Square Error (WESSE).					
-			double WSSSE = model.computeCost(scaledData);
+			double WSSSE = modelk.computeCost(userAlsFeatureVect);
 			System.out.println("WSSSE = " + WSSSE);
 			
 			//Shows the results
-			Vector[] centers = model.clusterCenters();
+			Vector[] centers = modelk.clusterCenters();
 			System.out.println("Cluster Centers: ");
 			for (Vector center: centers) {
 			  System.out.println(center);
@@ -246,19 +226,20 @@ public class SaavnUserClustering
 		}
 		
 		KMeans kmeansFinal = new KMeans().setK(6).setSeed(1L);
-		KMeansModel modelFinal = kmeansFinal.fit(scaledData);
-		
+		KMeansModel modelFinal = kmeansFinal.fit(userAlsFeatureVect);
+		/*
 		Dataset<Row> testDataVector = assembler.transform(data_grouped);
 		//Compute summary statistics by fitting the StandardScaler
 		StandardScalerModel scalerModelTest = scaler.fit(testDataVector);
 		
 		//Normalize each feature to have unit standard deviation
 		Dataset<Row> scaledDataTest = scalerModelTest.transform(testDataVector);
-		scaledDataTest.show();
+		scaledDataTest.show();*/
 	
 		// Make Predictions
-		Dataset<Row> predictionsTest = modelFinal.transform(scaledDataTest);
-		predictionsTest.show();*/
+		Dataset<Row> predictionsTest = modelFinal.transform(userAlsFeatureVect);
+		predictionsTest.show();
+		
 		/*Dataset<Row> userALSFeatures = model.userFactors().drop("features").withColumn("id", col("id").cast(DataTypes.StringType));
 		DataFrameWriter<Row> writer = userALSFeatures.write();
 		writer.text("/Users/baskars/Details/NextStep/BigData/Upgrad/Project/AnalyticsAssignment/als.txt");*/
