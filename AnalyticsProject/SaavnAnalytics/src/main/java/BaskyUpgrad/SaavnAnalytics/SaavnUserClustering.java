@@ -78,8 +78,6 @@ public class SaavnUserClustering
 		
 		// setting up connection with spark
 		sparkSession = SparkSession.builder()
-				.config("spark.hadoop.fs.s3a.access.key", "AKIAISBB7R6O76CD2J2A")
-				.config("spark.hadoop.fs.s3a.secret.key", "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")
 				.appName("SaavnAnalytics")
 				.master("local[*]")
 				.getOrCreate();
