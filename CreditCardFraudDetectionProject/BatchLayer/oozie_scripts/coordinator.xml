@@ -1,0 +1,18 @@
+<coordinator-app name="card_trans_batch-coord" start="${start}" end="${end}" frequency="${coord:hours(4)}" timezone="UTC" xmlns="uri:oozie:coordinator:0.4">
+    <action>
+        <workflow>
+            <app-path>${card_batch_home}/workflow.xml</app-path>
+            <configuration>
+                <property>
+                    <name>jobTracker</name>
+                    <value>${jobTracker}</value>
+                </property>
+                <property>
+                    <name>nameNode</name>
+                    <value>${nameNode}</value>
+                </property>
+            </configuration>
+        </workflow>
+    </action>
+</coordinator-app>
+

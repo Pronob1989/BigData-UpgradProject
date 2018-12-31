@@ -1,0 +1,71 @@
+
+-- Both sqoop and Hive job below will be part of coordinator oozie job
+
+-- Execute the job to get the new card_member data
+--sqoop job --exec inc_card_member
+
+-- Do import for member_score table which is full load everytime
+--sqoop job --exec full_member_score
+
+
+
+-- Hive job Details
+
+set hive.auto.convert.join=false;
+
+-- Create new_card_member_load staging table
+create table if not exists new_card_member (
+cid bigint,
+mid bigint,
+jdt string,
+ptd string,
+cn string,
+cty string) row format delimited fields terminated by ",";
+
+-- Compare with old members and get new card member list
+insert into table new_card_member
+select * from card_member_load cl WHERE cl.cid NOT IN (select cid from card_member_hbase);
+
+-- Insert new card members in hbase card_member_hbase table
+insert into table card_member_hbase
+select * from new_card_member;
+
+-- Insert default values for new card members in the lookup
+insert into table lookup_full_hbase
+select cid,'0','0','0', jdt from new_card_member;
+
+-- Create lookup UCL staging table
+create table lkup_bt_ucl (
+cid bigint,
+mid bigint,
+ucl bigint);
+
+-- Calc UCL and insert into lookup UCL staging table
+insert into table lkup_bt_ucl
+select cid, mid, (AVG(amt) + (3 * STDDEV_POP(amt))) as ucl from
+(select cid, key.m_id as mid,key.amt as amt,
+row_number() OVER (PARTITION BY cid order by UNIX_TIMESTAMP(key.tdt, 'dd-MM-yyyy HH:mm:ss') desc) as rank
+from card_trans_hbase where st = "GENUINE")a
+where rank <= 10 group by cid, mid;
+
+-- Create lookup full staging table for UCL & memscore
+create table lkup_bt_full (
+cid bigint,
+mid bigint,
+ucl bigint,
+score bigint);
+
+-- Insert UCL and Score into lookup full staging table
+insert into table lkup_bt_full
+select u.cid, u.mid, u.ucl, m.score from lkup_bt_ucl u
+LEFT OUTER JOIN memscore m
+ON (u.mid = m.mid);
+
+-- Insert UCL and Score into mapping lookup from staging table
+insert into table lookup_bt_hbase
+select cid, ucl, score from lkup_bt_full;
+
+-- Drop tables
+drop table new_card_member;
+drop table lkup_bt_ucl;
+drop table lkup_bt_full;

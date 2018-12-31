@@ -1,0 +1,119 @@
+
+
+
+--Create sqoop job card_member ingest from AWS RDS to HADOOP
+sqoop job --create inc_card_member --meta-connect jdbc:hsqldb:hsql://localhost:16000/sqoop -- import -connect jdbc:mysql://upgradawsrds.cpclxrkdvwmz.us-east-1.rds.amazonaws.com/cred_financials_data -username upgraduser -password upgraduser -table card_member -incremental append -check-column member_joining_dt -last-value "1970-01-01 00:00:00" -target-dir card_member 
+
+
+-- Execute the job once to get the initial data load
+sqoop job --exec inc_card_member
+
+-- Do import for member_score table which is full load everytime
+
+sqoop job --create full_member_score --meta-connect jdbc:hsqldb:hsql://localhost:16000/sqoop -- import -connect jdbc:mysql://upgradawsrds.cpclxrkdvwmz.us-east-1.rds.amazonaws.com/cred_financials_data -username upgraduser -password upgraduser -table member_score -target-dir member_score
+
+-- Execute the job once to get the initial data load
+sqoop job --exec full_member_score
+
+
+
+-- Hive Job Details should be executed one time before batch script
+set hive.auto.convert.join=false;
+
+--Create mapping table in hive for Hbase card_member table
+create external table card_member_hbase(cid bigint,mid bigint,jdt string,pdt string,cn string,cty string)
+STORED BY 'org.apache.hadoop.hive.hbase.HBaseStorageHandler'
+with serdeproperties ('hbase.columns.mapping'=':key,cd:mid,cd:jdt,cd:pdt,loc:cn,loc:cty')
+tblproperties('hbase.table.name'='card_member');
+
+-- Card member staging table in hive
+create external table if not exists card_member_load (
+cid bigint,
+mid bigint,
+jdt string,
+ptd string,
+cn string,
+cty string) row format delimited fields terminated by "," location '/user/cloudera/card_member';
+
+-- Load data into staging table from input arg HDFS location
+--load data inpath '/user/cloudera/card_member' into table card_member_load; 
+
+-- Insert data into HBase mapping table
+insert into table card_member_hbase select * from card_member_load;
+
+-- Create member score table
+create external table memscore (
+mid bigint,
+score bigint) row format delimited fields terminated by ',' location '/user/cloudera/member_score';
+
+-- Load member score data from input arg location in HDFS
+--load data inpath '/user/cloudera/member_score' into table memscore;
+
+-- Create lookup UCL staging table
+create table lkup_bt_ucl (
+cid bigint,
+mid bigint,
+ucl bigint);
+
+-- Calc UCL and insert into lookup UCL staging table
+insert into table lkup_bt_ucl
+select cid, mid, (AVG(amt) + (3 * STDDEV_POP(amt))) as ucl from
+(select cid, key.m_id as mid,key.amt as amt,
+row_number() OVER (PARTITION BY cid order by UNIX_TIMESTAMP(key.tdt, 'dd-MM-yyyy HH:mm:ss') desc) as rank
+from card_trans_hbase where st = "GENUINE")a
+where rank <= 10 group by cid, mid;
+
+-- Create lookup full staging table for UCL & memscore
+create table lkup_bt_full (
+cid bigint,
+mid bigint,
+ucl bigint,
+score bigint);
+
+-- Insert UCL and Score into lookup full staging table
+insert into table lkup_bt_full
+select u.cid, u.mid, u.ucl, m.score from lkup_bt_ucl u
+LEFT OUTER JOIN memscore m
+ON (u.mid = m.mid);
+
+-- Create mapping table for HBase lookup table for loading batching attributes
+create external table lookup_bt_hbase(cid bigint,
+ucl bigint, score bigint)
+STORED BY 'org.apache.hadoop.hive.hbase.HBaseStorageHandler'
+with serdeproperties
+("hbase.columns.mapping"=":key,bt:ucl,bt:score")
+tblproperties("hbase.table.name"="lookup");
+
+-- Insert UCL and Score into mapping lookup from staging table
+insert into table lookup_bt_hbase
+select cid, ucl, score from lkup_bt_full;
+
+-- Create mapping table for HBase lookup table for loading streaming attributes
+create external table lookup_st_hbase(cid bigint,
+pc bigint, tdt string)
+STORED BY 'org.apache.hadoop.hive.hbase.HBaseStorageHandler'
+with serdeproperties
+("hbase.columns.mapping"=":key,st:pc,st:tdt")
+tblproperties("hbase.table.name"="lookup");
+
+-- Insert postal code and transaction date into mapping lookup from staging table
+insert into table lookup_st_hbase
+select cid, pc, dt from
+(select cid ,key.tdt as dt, pc,
+row_number() OVER (PARTITION BY cid order by UNIX_TIMESTAMP(key.tdt, 'dd-MM-yyyy HH:mm:ss') desc) as rank
+from card_trans_hbase where st = 'GENUINE') a
+where rank == 1;
+
+-- Create mapping table for Hbase lookup table
+create external table lookup_full_hbase(cid bigint,
+ucl bigint, score bigint, pd bigint, tdt string)
+STORED BY 'org.apache.hadoop.hive.hbase.HBaseStorageHandler'
+with serdeproperties
+("hbase.columns.mapping"=":key,bt:ucl,bt:score, st:pc, st:tdt")
+tblproperties("hbase.table.name"="lookup");
+
+
+-- Drop tables
+drop table lkup_bt_ucl;
+drop table lkup_bt_full;
+drop table lookup_st_hbase;

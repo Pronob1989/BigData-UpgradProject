@@ -1,0 +1,59 @@
+<workflow-app name="card_trans_batch-wf" xmlns="uri:oozie:workflow:0.4">
+    <global>
+        <job-xml>${card_batch_home}/conf/hive-site.xml</job-xml>
+    </global>
+
+    <start to="sqoop_import_card_member"/>
+ 
+    <action name="sqoop_import_card_member">
+        <sqoop xmlns="uri:oozie:sqoop-action:0.2">
+            <job-tracker>${jobTracker}</job-tracker>
+            <name-node>${nameNode}</name-node>
+            <configuration>
+                <property>
+                    <name>oozie.action.external.stats.write</name>
+                    <value>true</value>
+                </property>
+            </configuration>
+	    <command>job --exec inc_card_member</command>
+        </sqoop>
+        <ok to="sqoop_import_member_score"/>
+        <error to="kill"/>
+    </action>
+    <action name="sqoop_import_member_score">
+        <sqoop xmlns="uri:oozie:sqoop-action:0.2">
+            <job-tracker>${jobTracker}</job-tracker>
+            <name-node>${nameNode}</name-node>
+            <prepare>
+                <delete path="${memscore_target_dir}"/>
+            </prepare>
+            <configuration>
+                <property>
+                    <name>oozie.action.external.stats.write</name>
+                    <value>true</value>
+                </property>
+            </configuration>
+	    <command>job --exec full_member_score</command>
+        </sqoop>
+        <ok to="hbase_table_update"/>
+        <error to="kill"/>
+    </action>
+
+    <action name="hbase_table_update">
+        <hive2 xmlns="uri:oozie:hive2-action:0.1">
+            <job-tracker>${jobTracker}</job-tracker>
+            <name-node>${nameNode}</name-node>
+            <jdbc-url>jdbc:hive2://localhost:10000/default</jdbc-url>
+            <script>${card_batch_home}/hql/PreAnalysis.hql</script>
+        </hive2>
+        <ok to="end"/>
+        <error to="kill"/>
+    </action>
+
+    <kill name="kill">
+        <message>Your job failed!</message>
+    </kill>
+    
+    <end name="end"/>
+
+</workflow-app>

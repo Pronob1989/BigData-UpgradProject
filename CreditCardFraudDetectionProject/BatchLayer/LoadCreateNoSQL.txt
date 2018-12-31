@@ -1,0 +1,34 @@
+
+-- Hbase shell command for table creation
+create 'card_transactions','md','td'
+create 'lookup','bt','st'
+create 'card_member','cd','loc'
+
+-- Create mapping table in hive for HBase card_transaction table
+create external table card_trans_hbase(key struct<m_id:bigint, tdt:string, amt:bigint>,
+cid bigint, pc bigint, 
+pos bigint, st string)
+STORED BY 'org.apache.hadoop.hive.hbase.HBaseStorageHandler' 
+with serdeproperties 
+("hbase.columns.mapping"=":key,md:cid,td:pc,td:pos,td:st") 
+tblproperties("hbase.table.name"="card_transactions");
+
+-- Card transaction staging table in hive
+create table if not exists trans_load (
+cid bigint,
+mid bigint,
+amt bigint,
+pc bigint,
+pos bigint,
+tdt string,
+st string) row format delimited fields terminated by ',' tblproperties ("skip.header.line.count"="1");
+
+-- Load data into staging table from input args HDFS location
+load data inpath '/user/cloudera/card_transactions.csv' into table trans_load;
+
+-- Insert card transactions which has valid card id
+INSERT INTO TABLE card_trans_hbase
+SELECT NAMED_STRUCT('m_id', tl.mid,'tdt', tl.tdt, 'amt', tl.amt),
+tl.cid,pc,pos,st  FROM trans_load tl; 
+
+drop table trans_load;
